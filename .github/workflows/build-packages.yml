@@ -5,6 +5,11 @@ on:
     tags:
       - 'v*'
   workflow_dispatch:
+    inputs:
+      version:
+        description: 'Version to build (e.g., v2026.2.1)'
+        required: false
+        type: string
 
 jobs:
   build-windows:
@@ -30,21 +35,30 @@ jobs:
         run: pnpm install --frozen-lockfile
 
       - name: Build TypeScript
-        run: pnpm build
+        run: pnpm build:no-a2ui
 
       - name: Build UI
         run: pnpm ui:build
 
       - name: Package Windows
+        run: npx electron-builder --win --x64
+
+      - name: Generate checksums
+        shell: pwsh
         run: |
-          mkdir -p build
-          npx electron-builder --win --x64
+          cd dist/packages
+          Get-ChildItem -Filter "*.exe" | ForEach-Object {
+            $hash = (Get-FileHash $_.Name -Algorithm SHA256).Hash
+            "$hash  $($_.Name)" | Out-File -Append -Encoding utf8 checksums-windows.txt
+          }
 
       - name: Upload Windows artifacts
         uses: actions/upload-artifact@v4
         with:
           name: windows-packages
-          path: dist/packages/*.exe
+          path: |
+            dist/packages/*.exe
+            dist/packages/checksums-windows.txt
           retention-days: 30
 
   build-macos:
@@ -70,15 +84,18 @@ jobs:
         run: pnpm install --frozen-lockfile
 
       - name: Build TypeScript
-        run: pnpm build
+        run: pnpm build:no-a2ui
 
       - name: Build UI
         run: pnpm ui:build
 
       - name: Package macOS
+        run: npx electron-builder --mac --x64 --arm64
+
+      - name: Generate checksums
         run: |
-          mkdir -p build
-          bash scripts/package-mac-electron.sh
+          cd dist/packages
+          shasum -a 256 *.dmg *.zip > checksums-macos.txt 2>/dev/null || true
 
       - name: Upload macOS artifacts
         uses: actions/upload-artifact@v4
@@ -87,6 +104,7 @@ jobs:
           path: |
             dist/packages/*.dmg
             dist/packages/*.zip
+            dist/packages/checksums-macos.txt
           retention-days: 30
 
   build-linux:
@@ -112,13 +130,18 @@ jobs:
         run: pnpm install --frozen-lockfile
 
       - name: Build TypeScript
-        run: pnpm build
+        run: pnpm build:no-a2ui
 
       - name: Build UI
         run: pnpm ui:build
 
       - name: Package Linux
-        run: bash scripts/package-linux.sh
+        run: npx electron-builder --linux --x64
+
+      - name: Generate checksums
+        run: |
+          cd dist/packages
+          sha256sum *.deb *.AppImage > checksums-linux.txt 2>/dev/null || true
 
       - name: Upload Linux artifacts
         uses: actions/upload-artifact@v4
@@ -127,27 +150,140 @@ jobs:
           path: |
             dist/packages/*.deb
             dist/packages/*.AppImage
+            dist/packages/checksums-linux.txt
           retention-days: 30
 
   create-release:
     needs: [build-windows, build-macos, build-linux]
     runs-on: ubuntu-latest
-    if: startsWith(github.ref, 'refs/tags/v')
+    if: startsWith(github.ref, 'refs/tags/v') || github.event_name == 'workflow_dispatch'
     permissions:
       contents: write
     steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
       - name: Download all artifacts
         uses: actions/download-artifact@v4
         with:
           path: artifacts
 
+      - name: Organize artifacts
+        run: |
+          mkdir -p release-assets
+          find artifacts -type f \( -name "*.exe" -o -name "*.dmg" -o -name "*.zip" -o -name "*.deb" -o -name "*.AppImage" -o -name "checksums-*.txt" \) -exec cp {} release-assets/ \;
+          ls -lh release-assets/
+
+      - name: Generate combined checksums
+        run: |
+          cd release-assets
+          cat checksums-*.txt > SHA256SUMS.txt || true
+          rm checksums-*.txt || true
+
+      - name: Get version
+        id: get_version
+        run: |
+          if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
+            VERSION="${{ github.event.inputs.version }}"
+            if [ -z "$VERSION" ]; then
+              VERSION=$(grep '"version"' package.json | head -1 | sed 's/.*"version": "\(.*\)".*/\1/')
+              VERSION="v$VERSION"
+            fi
+          else
+            VERSION=${GITHUB_REF#refs/tags/}
+          fi
+          echo "version=$VERSION" >> $GITHUB_OUTPUT
+          echo "Version: $VERSION"
+
+      - name: Generate release notes
+        id: release_notes
+        run: |
+          cat > release-notes.md << 'EOF'
+          # OpenClaw ${{ steps.get_version.outputs.version }}
+
+          ## 📦 Downloads
+
+          ### Windows
+          - **Installer**: `OpenClaw-Setup-*.exe` - Full installer with NSIS
+          - **Portable**: `OpenClaw-*-portable.exe` - No installation required
+
+          ### macOS
+          - **DMG**: `OpenClaw-*.dmg` - Drag and drop to Applications
+          - **ZIP**: `OpenClaw-*-mac.zip` - Alternative distribution
+
+          ### Linux
+          - **Debian/Ubuntu**: `openclaw_*.deb` - Install with `dpkg -i`
+          - **AppImage**: `OpenClaw-*.AppImage` - Universal Linux binary
+
+          ## 🔐 Verification
+
+          All packages include SHA256 checksums in `SHA256SUMS.txt`. Verify your download:
+
+          **Windows (PowerShell)**:
+          ```powershell
+          Get-FileHash OpenClaw-Setup-*.exe -Algorithm SHA256
+          ```
+
+          **macOS/Linux**:
+          ```bash
+          sha256sum -c SHA256SUMS.txt
+          ```
+
+          ## 📋 Installation
+
+          ### Windows
+          1. Download `OpenClaw-Setup-*.exe`
+          2. Run the installer
+          3. Follow the installation wizard
+          4. Launch from Start Menu
+
+          ### macOS
+          1. Download `OpenClaw-*.dmg`
+          2. Open the DMG
+          3. Drag OpenClaw to Applications
+          4. Right-click → Open (first time only)
+
+          ### Linux
+          ```bash
+          # Debian/Ubuntu
+          sudo dpkg -i openclaw_*.deb
+          sudo apt-get install -f  # Fix dependencies if needed
+
+          # AppImage
+          chmod +x OpenClaw-*.AppImage
+          ./OpenClaw-*.AppImage
+          ```
+
+          ## 🚀 What's New
+
+          See the [CHANGELOG](https://github.com/${{ github.repository }}/blob/main/CHANGELOG.md) for detailed changes.
+
+          ## 📝 Notes
+
+          - **Unsigned builds**: Windows SmartScreen and macOS Gatekeeper may show warnings
+          - **First launch**: The app will start the OpenClaw gateway on port 18789
+          - **Control UI**: Access at http://localhost:18789
+
+          ## 🐛 Issues
+
+          Report bugs at: https://github.com/${{ github.repository }}/issues
+          EOF
+          
+          echo "Generated release notes"
+
       - name: Create Release
         uses: softprops/action-gh-release@v2
         with:
-          files: |
-            artifacts/windows-packages/*
-            artifacts/macos-packages/*
-            artifacts/linux-packages/*
+          tag_name: ${{ steps.get_version.outputs.version }}
+          name: OpenClaw ${{ steps.get_version.outputs.version }}
+          body_path: release-notes.md
+          files: release-assets/*
           draft: false
           prerelease: false
           generate_release_notes: true
+          fail_on_unmatched_files: true
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
