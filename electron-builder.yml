@@ -1,0 +1,133 @@
+appId: ai.openclaw.desktop
+productName: OpenClaw
+copyright: Copyright © 2026 OpenClaw
+
+directories:
+  output: dist/packages
+  buildResources: assets
+
+files:
+  - dist/**/*
+  - ui/dist/**/*
+  - docs/**/*
+  - extensions/**/*
+  - assets/**/*
+  - skills/**/*
+  - patches/**/*
+  - openclaw.mjs
+  - package.json
+  - README.md
+  - LICENSE
+  - "!**/{.git,.github,.vscode,node_modules,test,tests,__tests__,.swiftlint.yml,.swiftformat}"
+  - "!apps/**"
+  - "!src/**"
+  - "!*.ts"
+  - "!tsconfig.json"
+
+extraResources:
+  - from: node_modules
+    to: node_modules
+    filter:
+      - "**/*"
+
+asar: true
+asarUnpack:
+  - "**/*.node"
+
+mac:
+  category: public.app-category.developer-tools
+  icon: assets/icons/icon.icns
+  target:
+    - target: dmg
+      arch:
+        - x64
+        - arm64
+    - target: zip
+      arch:
+        - x64
+        - arm64
+  hardenedRuntime: true
+  gatekeeperAssess: false
+  entitlements: build/entitlements.mac.plist
+  entitlementsInherit: build/entitlements.mac.plist
+
+dmg:
+  title: "${productName} ${version}"
+  icon: assets/icons/icon.icns
+  background: assets/dmg-background.png
+  contents:
+    - x: 130
+      y: 220
+    - x: 410
+      y: 220
+      type: link
+      path: /Applications
+  window:
+    width: 540
+    height: 380
+
+win:
+  icon: assets/icons/icon.ico
+  target:
+    - target: nsis
+      arch:
+        - x64
+        - ia32
+    - target: portable
+      arch:
+        - x64
+  publisherName: OpenClaw
+  verifyUpdateCodeSignature: false
+
+nsis:
+  oneClick: false
+  perMachine: false
+  allowToChangeInstallationDirectory: true
+  deleteAppDataOnUninstall: false
+  createDesktopShortcut: always
+  createStartMenuShortcut: true
+  shortcutName: "${productName}"
+  include: build/installer.nsh
+
+portable:
+  artifactName: "${productName}-${version}-portable.${ext}"
+
+linux:
+  icon: assets/icons/icon.png
+  category: Development
+  target:
+    - target: deb
+      arch:
+        - x64
+        - arm64
+    - target: AppImage
+      arch:
+        - x64
+        - arm64
+  maintainer: OpenClaw Team
+  vendor: OpenClaw
+  synopsis: Personal AI Assistant - WhatsApp Gateway CLI
+  description: |
+    OpenClaw is a personal AI assistant you run on your own devices.
+    It answers you on the channels you already use (WhatsApp, Telegram, Slack, Discord, etc.).
+
+deb:
+  depends:
+    - gconf2
+    - gconf-service
+    - libnotify4
+    - libappindicator1
+    - libxtst6
+    - libnss3
+
+appImage:
+  license: LICENSE
+  artifactName: "${productName}-${version}.${ext}"
+
+publish:
+  provider: github
+  owner: openclaw
+  repo: openclaw
+  releaseType: release
+
+afterSign: build/notarize.js
